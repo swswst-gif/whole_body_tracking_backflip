@@ -16,7 +16,10 @@
     # Low-Freq 变体（step_dt 应为 0.04）：
     python scripts/generate_deploy_yaml.py --onnx <policy.onnx> --step-dt 0.04
 
-依赖：onnx、pyyaml（训练环境里通常都有）。
+    # 默认姿态取 motion 第一帧（default_joint_pos 与 actions offset 同步替换）：
+    python scripts/generate_deploy_yaml.py --onnx <policy.onnx> --motion artifacts/motion:v3/motion.npz
+
+依赖：onnx、pyyaml、numpy（训练环境里通常都有）。
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import argparse
 import re
 from pathlib import Path
 
+import numpy as np
 import onnx
 import yaml
 
@@ -243,6 +247,26 @@ yaml.add_representer(float, _float_repr, Dumper=DeployDumper)
 yaml.add_representer(list, _list_repr, Dumper=DeployDumper)
 
 
+def apply_first_frame_default(deploy: dict, meta: dict[str, str], motion_file: Path) -> None:
+    """把 default_joint_pos 和 actions offset 替换为 motion 第一帧的关节角（policy 关节顺序）。
+
+    注意：训练时 joint_pos_rel 观测与动作 offset 参考的都是 sim 名义默认姿态（URDF init），
+    替换后这两个参考点会整体平移（本 motion 最大 0.37 rad），策略存在分布偏移风险。
+    """
+    n_joints = len(deploy["joint_ids_map"])
+    joint_pos = np.load(str(motion_file))["joint_pos"]
+    if joint_pos.ndim != 2 or joint_pos.shape[1] != n_joints:
+        raise ValueError(f"motion joint_pos 形状 {joint_pos.shape} 与 deploy 关节数 {n_joints} 不一致")
+
+    first_frame = [float(v) for v in joint_pos[0]]
+    old_default = [float(x) for x in parse_csv_list(meta["default_joint_pos"])]
+    deploy["default_joint_pos"] = first_frame
+    deploy["actions"]["JointPositionAction"]["offset"] = list(first_frame)
+
+    max_diff = max(abs(a - b) for a, b in zip(first_frame, old_default))
+    print(f"[INFO] default_joint_pos 已替换为 motion 第一帧，与 sim 默认姿态最大差异 {max_diff:.3f} rad")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -257,6 +281,10 @@ def main():
         "--step-dt", type=float, default=0.02,
         help="策略控制周期（秒），默认 0.02 = 50 Hz；Low-Freq 变体用 0.04",
     )
+    parser.add_argument(
+        "--motion", type=Path, default=None,
+        help="训练用的 motion.npz 路径；提供时 default_joint_pos/actions offset 取 motion 第一帧",
+    )
     args = parser.parse_args()
 
     if not args.onnx.is_file():
@@ -268,6 +296,10 @@ def main():
     meta = parse_metadata(model)
     deploy = build_deploy_yaml(meta, args.step_dt)
     total_obs_dim = deploy.pop("_total_obs_dim")
+    if args.motion is not None:
+        if not args.motion.is_file():
+            parser.error(f"motion 文件不存在: {args.motion}")
+        apply_first_frame_default(deploy, meta, args.motion)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w", encoding="utf-8") as f:

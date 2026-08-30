@@ -49,16 +49,6 @@ class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
             dynamic_axes={},
         )
 
-        model = onnx.load(onnx_path)
-        onnx.save_model(
-            model,
-            onnx_path,
-            save_as_external_data=True,
-            all_tensors_to_one_file=True,
-            location=f"{filename}.data",
-            size_threshold=0,
-        )
-
 
 def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:
     fmt = f"{{:.{decimals}f}}"
@@ -123,11 +113,6 @@ def attach_onnx_metadata(env: ManagerBasedRLEnv, run_path: str, path: str, filen
         entry.value = list_to_csv_str(v) if isinstance(v, list) else str(v)
         model.metadata_props.append(entry)
 
-    onnx.save_model(
-        model,
-        onnx_path,
-        save_as_external_data=True,
-        all_tensors_to_one_file=True,
-        location=f"{filename}.data",
-        size_threshold=0,
-    )
+        # self-contained single file (weights embedded); do NOT use save_as_external_data,
+        # otherwise the .onnx alone is unusable without its companion .data file
+        onnx.save(model, onnx_path)
