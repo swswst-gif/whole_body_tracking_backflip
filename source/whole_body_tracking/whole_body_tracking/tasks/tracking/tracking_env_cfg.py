@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import MISSING
+from dataclasses import MISSING #配置项必须外部传入、无默认值
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
@@ -37,7 +37,7 @@ VELOCITY_RANGE = {
 }
 
 
-@configclass
+@configclass #标记为 Isaac Lab 专用配置类
 class MySceneCfg(InteractiveSceneCfg):
     """Configuration for the terrain scene with a legged robot."""
 
@@ -45,7 +45,7 @@ class MySceneCfg(InteractiveSceneCfg):
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",
-        collision_group=-1,
+        collision_group=-1, #全部实体都能和地面碰撞
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -58,7 +58,7 @@ class MySceneCfg(InteractiveSceneCfg):
         ),
     )
     # robots
-    robot: ArticulationCfg = MISSING
+    robot: ArticulationCfg = MISSING #当前文件不写机器人模型，运行时外部文件传入
     # lights
     light = AssetBaseCfg(
         prim_path="/World/light",
@@ -96,6 +96,24 @@ class CommandsCfg:
         },
         velocity_range=VELOCITY_RANGE,
         joint_position_range=(-0.1, 0.1),
+        # pose_range={
+        #     "x": (0.0, 0.0),
+        #     "y": (0.0, 0.0),
+        #     "z": (0.0, 0.0),
+        #     "roll": (0.0, 0.0),
+        #     "pitch": (0.0, 0.0),
+        #     "yaw": (0.0, 0.0),
+        # },
+        # velocity_range={
+        #     "x": (0.0, 0.0),
+        #     "y": (0.0, 0.0),
+        #     "z": (0.0, 0.0),
+        #     "roll": (0.0, 0.0),
+        #     "pitch": (0.0, 0.0),
+        #     "yaw": (0.0, 0.0),
+        # },
+        # joint_position_range=(0.0, 0.0),
+        adaptive_kernel_size=3,
     )
 
 
@@ -185,8 +203,7 @@ class EventCfg:
             "com_range": {"x": (-0.025, 0.025), "y": (-0.05, 0.05), "z": (-0.05, 0.05)},
         },
     )
-
-    # interval
+    # # interval
     push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
@@ -194,6 +211,29 @@ class EventCfg:
         params={"velocity_range": VELOCITY_RANGE},
     )
 
+    # physics_material = EventTerm(
+    #     func=mdp.randomize_rigid_body_material,
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+    #         "static_friction_range": (0.6, 1.4),
+    #         "dynamic_friction_range": (0.6, 1.3),
+    #         "restitution_range": (0.0, 0.10),
+    #         "num_buckets": 64,
+    #     },
+    # )
+    # base_com = EventTerm(
+    #     func=mdp.randomize_rigid_body_com,
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+    #         "com_range": {"x": (-0.02, 0.02), "y": (-0.02, 0.02), "z": (-0.02, 0.02)},
+    #     },
+    # )
+    # physics_material = None  # randomize rigid body material: OFF
+    # add_joint_default_pos = None  # randomize joint default pos: OFF
+    # base_com = None  # randomize rigid body com: OFF
+    # push_robot = None  # random pushes: OFF
 
 @configclass
 class RewardsCfg:
@@ -201,8 +241,8 @@ class RewardsCfg:
 
     motion_global_anchor_pos = RewTerm(
         func=mdp.motion_global_anchor_position_error_exp,
-        weight=0.5,
-        params={"command_name": "motion", "std": 0.3},
+        weight=1.0,
+        params={"command_name": "motion", "std": 0.2},
     )
     motion_global_anchor_ori = RewTerm(
         func=mdp.motion_global_anchor_orientation_error_exp,
@@ -211,25 +251,25 @@ class RewardsCfg:
     )
     motion_body_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
-        weight=1.0,
+        weight=0.5,
         params={"command_name": "motion", "std": 0.3},
     )
     motion_body_ori = RewTerm(
         func=mdp.motion_relative_body_orientation_error_exp,
-        weight=1.0,
-        params={"command_name": "motion", "std": 0.4},
+        weight=0.5,
+        params={"command_name": "motion", "std": 0.35},
     )
     motion_body_lin_vel = RewTerm(
         func=mdp.motion_global_body_linear_velocity_error_exp,
-        weight=1.0,
+        weight=0.5,
         params={"command_name": "motion", "std": 1.0},
     )
     motion_body_ang_vel = RewTerm(
         func=mdp.motion_global_body_angular_velocity_error_exp,
-        weight=1.0,
-        params={"command_name": "motion", "std": 3.14},
+        weight=0.5,
+        params={"command_name": "motion", "std": 4.0},
     )
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-1)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
     joint_limit = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
@@ -248,6 +288,27 @@ class RewardsCfg:
             "threshold": 1.0,
         },
     )
+    # 新增：双足位置 / 线速度
+    motion_foot_pos = RewTerm(
+        func=mdp.motion_relative_body_position_error_exp,
+        weight=1.0,
+        params={
+            "command_name": "motion",
+            "std": 0.1,
+            "body_names": ["left_ankle_roll_link", "right_ankle_roll_link"],
+        },
+    )
+    motion_foot_lin_vel = RewTerm(
+        func=mdp.motion_global_body_linear_velocity_error_exp,
+        weight=0.5,
+        params={
+            "command_name": "motion",
+            "std": 1.0,
+            "body_names": ["left_ankle_roll_link", "right_ankle_roll_link"],
+        },
+    )
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    joint_torque = RewTerm(func=mdp.joint_torques_l2, weight=-1e-5)
 
 
 @configclass
@@ -255,6 +316,7 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    motion_end = DoneTerm(func=mdp.motion_end, params={"command_name": "motion"}, time_out=True)
     anchor_pos = DoneTerm(
         func=mdp.bad_anchor_pos_z_only,
         params={"command_name": "motion", "threshold": 0.25},
@@ -276,6 +338,9 @@ class TerminationsCfg:
             ],
         },
     )
+    # anchor_ori = None
+    # anchor_pos = None
+    # ee_body_pos = None
 
 
 @configclass
@@ -308,7 +373,7 @@ class TrackingEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         """Post initialization."""
-        # general settings
+        # general settings   
         self.decimation = 4
         self.episode_length_s = 10.0
         # simulation settings
@@ -317,6 +382,6 @@ class TrackingEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = self.scene.terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
         # viewer settings
-        self.viewer.eye = (1.5, 1.5, 1.5)
+        self.viewer.eye = (4, 4, 4)
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "robot"

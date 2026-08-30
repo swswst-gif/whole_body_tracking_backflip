@@ -41,13 +41,13 @@ class MotionLoader:
         self._body_indexes = body_indexes
         self.time_step_total = self.joint_pos.shape[0]
 
-    @property
+    @property #只读属性：只返回用户指定的连杆数据
     def body_pos_w(self) -> torch.Tensor:
         return self._body_pos_w[:, self._body_indexes]
 
     @property
-    def body_quat_w(self) -> torch.Tensor:
-        return self._body_quat_w[:, self._body_indexes]
+    def body_quat_w(self) -> torch.Tensor: #连杆全局姿态
+        return self._body_quat_w[:, self._body_indexes]  
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
@@ -59,7 +59,7 @@ class MotionLoader:
 
 
 class MotionCommand(CommandTerm):
-    cfg: MotionCommandCfg
+    cfg: MotionCommandCfg 
 
     def __init__(self, cfg: MotionCommandCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
@@ -77,7 +77,9 @@ class MotionCommand(CommandTerm):
         self.body_quat_relative_w = torch.zeros(self.num_envs, len(cfg.body_names), 4, device=self.device)
         self.body_quat_relative_w[:, :, 0] = 1.0
 
-        self.bin_count = int(self.motion.time_step_total // (1 / (env.cfg.decimation * env.cfg.sim.dt))) + 1
+        # 自适应重采样
+        # self.bin_count = int(self.motion.time_step_total // (1 / (env.cfg.decimation * env.cfg.sim.dt))) + 1
+        self.bin_count = max(int(self.motion.time_step_total // 10), 1)
         self.bin_failed_count = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self._current_bin_failed = torch.zeros(self.bin_count, dtype=torch.float, device=self.device)
         self.kernel = torch.tensor(
@@ -232,6 +234,10 @@ class MotionCommand(CommandTerm):
             * (self.motion.time_step_total - 1)
         ).long()
 
+        if self.cfg.init_frame_prob > 0.0:
+            init_mask = torch.rand(len(env_ids), device=self.device) < self.cfg.init_frame_prob
+            self.time_steps[env_ids[init_mask]] = 0
+
         # Metrics
         H = -(sampling_probabilities * (sampling_probabilities + 1e-12).log()).sum()
         H_norm = H / math.log(self.bin_count)
@@ -243,7 +249,12 @@ class MotionCommand(CommandTerm):
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
             return
-        self._adaptive_sampling(env_ids)
+        if self.cfg.reset_to_start:
+            self.time_steps[env_ids] = 0
+        elif self.cfg.reset_frame >= 0:
+            self.time_steps[env_ids] = self.cfg.reset_frame
+        else:
+            self._adaptive_sampling(env_ids)
 
         root_pos = self.body_pos_w[:, 0].clone()
         root_ori = self.body_quat_w[:, 0].clone()
@@ -278,8 +289,12 @@ class MotionCommand(CommandTerm):
 
     def _update_command(self):
         self.time_steps += 1
-        env_ids = torch.where(self.time_steps >= self.motion.time_step_total)[0]
-        self._resample_command(env_ids)
+        if self.cfg.terminate_at_motion_end:
+            # 播完即停：clamp 到最后一帧，由 motion_end 终止结束 episode
+            self.time_steps = torch.clamp(self.time_steps, max=self.motion.time_step_total - 1)
+        else:
+            env_ids = torch.where(self.time_steps >= self.motion.time_step_total)[0]
+            self._resample_command(env_ids)
 
         anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
         anchor_quat_w_repeat = self.anchor_quat_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
@@ -369,6 +384,10 @@ class MotionCommandCfg(CommandTermCfg):
     adaptive_lambda: float = 0.8
     adaptive_uniform_ratio: float = 0.1
     adaptive_alpha: float = 0.001
+    init_frame_prob: float = 0.0  # 0~1：每次 reset 从参考第 0 帧开始的比例
+    reset_to_start: bool = False  # True：每次 reset 都从参考第 0 帧开始（回放/评估用）
+    reset_frame: int = -1  # >=0：固定从这一帧初始化（调试用，默认关闭）
+    terminate_at_motion_end: bool = False  # True：motion 播完即终止，不再循环重采样
 
     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
     anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)

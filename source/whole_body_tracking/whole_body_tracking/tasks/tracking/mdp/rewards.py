@@ -9,6 +9,8 @@ from isaaclab.utils.math import quat_error_magnitude
 
 from whole_body_tracking.tasks.tracking.mdp.commands import MotionCommand
 
+from isaaclab.utils.math import quat_rotate_inverse 
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -80,3 +82,23 @@ def feet_contact_time(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, thresh
     last_contact_time = contact_sensor.data.last_contact_time[:, sensor_cfg.body_ids]
     reward = torch.sum((last_contact_time < threshold) * first_air, dim=-1)
     return reward
+
+def action_rate_l2_phase(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    lambda_low: float = 0.03,
+    lambda_high: float = 0.08,
+    phase_threshold: float = 0.8,
+) -> torch.Tensor:
+    """相位感知的动作变化惩罚：φ<阈值用 lambda_low，否则 lambda_high。返回已带负号。"""
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    phase = command.time_steps.float() / max(command.motion.time_step_total, 1)
+    lam = torch.where(
+        phase >= phase_threshold,
+        torch.full_like(phase, lambda_high),
+        torch.full_like(phase, lambda_low),
+    )
+    action = env.action_manager.action
+    prev = env.action_manager.prev_action
+    rate = torch.sum(torch.square(action - prev), dim=-1)
+    return -lam * rate

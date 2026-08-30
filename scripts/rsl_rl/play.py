@@ -20,6 +20,8 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+
+parser.add_argument("--export_only", action="store_true", default=False, help="只导出 ONNX 并退出，不运行环境模拟。")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -60,7 +62,6 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
 from whole_body_tracking.utils.exporter import attach_onnx_metadata, export_motion_policy_as_onnx
-
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
@@ -109,6 +110,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO] Loading experiment from directory: {log_root_path}")
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+    
+    # 回放：固定从参考第 105 帧（空中倒立）开始，关闭干扰
+    env_cfg.commands.motion.reset_frame = 0
+    # env_cfg.commands.motion.reset_to_start = True
+    env_cfg.commands.motion.pose_range = {k: (0.0, 0.0) for k in ["x", "y", "z", "roll", "pitch", "yaw"]}
+    env_cfg.commands.motion.velocity_range = {k: (0.0, 0.0) for k in ["x", "y", "z", "roll", "pitch", "yaw"]}
+    env_cfg.commands.motion.joint_position_range = (0.0, 0.0)
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -152,8 +160,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         filename="policy.onnx",
     )
     attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
+    
+    # === 新增条件判断 ===
+    if args_cli.export_only:
+        print(f"\n=== [INFO] 触发了 --export_only 模式 ===")
+        print(f"=== ONNX 模型及 Metadata 已成功导出至: {export_model_dir} ===")
+        env.close()
+        simulation_app.close()
+        import sys
+        sys.exit(0)
+    # ====================
+    
     # reset environment
     obs, _ = env.get_observations()
+
+    cmd = env.unwrapped.command_manager.get_term("motion")
+    print("[DEBUG] start frames:", cmd.time_steps[:4].tolist())
+    
     timestep = 0
     # simulate environment
     while simulation_app.is_running():
@@ -163,6 +186,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
+        if timestep % 5 == 0:
+            robot = env.unwrapped.scene["robot"]
+            cmd = env.unwrapped.command_manager.get_term("motion")
+            base_v = robot.data.root_lin_vel_w[0]   # 根线速度
+            torso = robot.data.body_ang_vel_w[0, robot.body_names.index("torso_link")]
+            print(f"frame={cmd.time_steps[0].item()} vz={base_v[2].item():.2f} pitch_rate={torso[1].item():.2f}")
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

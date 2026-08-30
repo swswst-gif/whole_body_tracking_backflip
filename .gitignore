@@ -26,6 +26,11 @@
 **/videos/*
 **/wandb/*
 **/.neptune/*
+/artifacts/
+/data/
+/logs/
+/outputs/
+/wandb/
 docker/artifacts/
 *.tmp
 
