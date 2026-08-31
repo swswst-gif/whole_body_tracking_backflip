@@ -7,7 +7,7 @@
 用法：
     # 1) 先导出 ONNX（play.py 里已有 --export_only 分支）
     python scripts/rsl_rl/play.py --task Tracking-Flat-G1-Wo-State-Estimation-v0 \
-        --load_run <run_name> --load_checkpoint model_xxx.pt --export_only
+        --load_run <run_name> --checkpoint model_xxx.pt --export_only
 
     # 2) 从 ONNX metadata 生成 deploy.yaml
     python scripts/generate_deploy_yaml.py \
